@@ -6,6 +6,7 @@ import com.fabricaescuela.digitalbank.cuenta.entity.Cuenta;
 import com.fabricaescuela.digitalbank.cuenta.entity.Transaccion;
 import com.fabricaescuela.digitalbank.cuenta.exception.CuentaNoDisponibleException;
 import com.fabricaescuela.digitalbank.cuenta.exception.CuentaNoEncontradaException;
+import com.fabricaescuela.digitalbank.cuenta.exception.MontoInvalidoException;
 import com.fabricaescuela.digitalbank.cuenta.interfaces.DepositoService;
 import com.fabricaescuela.digitalbank.cuenta.repository.CuentaRepository;
 import com.fabricaescuela.digitalbank.cuenta.repository.TransaccionRepository;
@@ -30,6 +31,8 @@ public class DepositoServiceImpl implements DepositoService {
     @Override
     @Transactional
     public TransaccionResponse registrarDeposito(UUID cuentaId, DepositoRequest request) {
+        validarMonto(request.monto());
+
         Cuenta cuenta = cuentaRepository.findById(cuentaId)
                 .orElseThrow(CuentaNoEncontradaException::new);
 
@@ -49,6 +52,12 @@ public class DepositoServiceImpl implements DepositoService {
         Transaccion transaccionGuardada = transaccionRepository.save(transaccion);
 
         return TransaccionResponse.from(transaccionGuardada);
+    }
+
+    private void validarMonto(BigDecimal monto) {
+        if (monto == null || monto.signum() <= 0) {
+            throw new MontoInvalidoException();
+        }
     }
 
     private void validarCuentaDisponible(Cuenta cuenta) {

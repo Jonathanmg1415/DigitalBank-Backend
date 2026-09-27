@@ -1,0 +1,425 @@
+{
+  "info": {
+    "_postman_id": "3f2a1c9e-8b4d-4e2a-9d7a-5c1e6f0a2b3c",
+    "name": "DigitalBank Backend",
+    "description": "Colección generada a partir de la lectura verificada del código fuente (controladores, DTOs y servicios) de digital-bank. Cubre HU-01 (registro de cliente), HU-18 (login), HU-05 (apertura de cuenta), HU-10 (depósito) y HU-06 (consulta de saldo), incluyendo tanto casos válidos como los casos de error confirmados contra el código real.\n\nNOTA IMPORTANTE: no existe ningún endpoint para autoregistrarse como ADMIN o CAJERO — CredencialesServiceImpl.registrarCredencialesCliente() siempre asigna Rol.CLIENTE. Para probar los endpoints que requieren rol ADMIN o CAJERO (registrar cliente, depositar) hace falta un usuario con ese rol insertado manualmente en la tabla `usuario`.\n\nUsa el environment 'DigitalBank - Local' adjunto. Los requests de login guardan el token automáticamente en las variables de entorno correspondientes mediante un test script.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login - credenciales válidas (CLIENTE)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "var json = pm.response.json();",
+                  "pm.test('Devuelve token Bearer', function () {",
+                  "  pm.expect(json.token).to.be.a('string');",
+                  "  pm.expect(json.tokenType).to.eql('Bearer');",
+                  "});",
+                  "if (json.token) { pm.environment.set('clienteToken', json.token); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{clienteEmail}}\",\n  \"password\": \"{{clientePassword}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "login"]
+            },
+            "description": "AuthController.login — verificado en AuthServiceImpl. Devuelve 200 con { token, tokenType: 'Bearer', expiresInMinutes }."
+          }
+        },
+        {
+          "name": "Login - contraseña incorrecta (401 genérico)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 401', function () { pm.response.to.have.status(401); });",
+                  "pm.test('Mensaje genérico, no revela cuál dato falló', function () {",
+                  "  pm.expect(pm.response.json().message).to.eql('Credenciales inválidas');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{clienteEmail}}\",\n  \"password\": \"ClaveIncorrecta1\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "login"]
+            },
+            "description": "Verificado (AuthServiceImpl.login): email inexistente y contraseña incorrecta lanzan la misma CredencialesInvalidasException, mismo mensaje 'Credenciales inválidas', 401 — diseño anti-enumeración."
+          }
+        },
+        {
+          "name": "Login - cuenta bloqueada tras 3 intentos (429)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 429 tras el 3er intento fallido', function () {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([401, 429]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{clienteEmail}}\",\n  \"password\": \"ClaveIncorrecta1\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "login"]
+            },
+            "description": "Ejecuta este request 3 veces seguidas con la misma contraseña incorrecta (Usuario.MAX_INTENTOS_FALLIDOS = 3). El 1° y 2° intento responden 401; al 3° la cuenta queda BLOQUEADO_TEMPORAL por 1 hora (Usuario.HORAS_BLOQUEO) y las siguientes peticiones responden 429 CuentaBloqueadaException, incluso con la contraseña correcta. El desbloqueo es automático al pasar la hora (no requiere acción de un admin)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Clientes (requiere rol ADMIN)",
+      "item": [
+        {
+          "name": "Registrar cliente - datos válidos (201)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tipoDocumento\": \"CC\",\n  \"numeroDocumento\": \"{{numeroDocumento}}\",\n  \"nombres\": \"Juan\",\n  \"apellidos\": \"Pérez\",\n  \"fechaNacimiento\": \"1995-05-20\",\n  \"telefono\": \"3001234567\",\n  \"email\": \"{{clienteEmail}}\",\n  \"password\": \"{{clientePassword}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/clientes",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "clientes"]
+            },
+            "description": "ClienteController.registrar, @PreAuthorize hasRole('ADMIN'). Campos exactos exigidos por ClienteRegistroRequest (verificado): tipoDocumento, numeroDocumento, nombres, apellidos, fechaNacimiento (@Past), telefono (10 dígitos, @Pattern), email, password (mínimo 8 caracteres). No existe un campo único 'nombre completo'. Devuelve 201."
+          }
+        },
+        {
+          "name": "Registrar cliente - documento duplicado (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 409', function () { pm.response.to.have.status(409); });",
+                  "pm.test('Mensaje: El cliente ya existe', function () {",
+                  "  pm.expect(pm.response.json().message).to.eql('El cliente ya existe');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tipoDocumento\": \"CC\",\n  \"numeroDocumento\": \"{{numeroDocumento}}\",\n  \"nombres\": \"Otro\",\n  \"apellidos\": \"Cliente\",\n  \"fechaNacimiento\": \"1990-01-15\",\n  \"telefono\": \"3009876543\",\n  \"email\": \"otro.email@example.com\",\n  \"password\": \"OtraClave123\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/clientes",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "clientes"]
+            },
+            "description": "Requiere haber corrido antes 'Registrar cliente - datos válidos' con el mismo numeroDocumento. Verificado en ClienteServiceImpl.validarDocumentoUnico(): mismo mensaje 'El cliente ya existe' que un correo duplicado, no distingue cuál campo colisionó."
+          }
+        },
+        {
+          "name": "Registrar cliente - menor de edad (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 400', function () { pm.response.to.have.status(400); });",
+                  "pm.test('Mensaje: El cliente debe ser mayor de edad', function () {",
+                  "  pm.expect(pm.response.json().message).to.eql('El cliente debe ser mayor de edad');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tipoDocumento\": \"CC\",\n  \"numeroDocumento\": \"1099999999\",\n  \"nombres\": \"Menor\",\n  \"apellidos\": \"De Edad\",\n  \"fechaNacimiento\": \"2015-01-01\",\n  \"telefono\": \"3001112233\",\n  \"email\": \"menor.edad@example.com\",\n  \"password\": \"Clave1234\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/clientes",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "clientes"]
+            },
+            "description": "Verificado en ClienteServiceImpl.validarMayoriaDeEdad(): EDAD_MINIMA = 18, calculada con Period.between(fechaNacimiento, LocalDate.now()).getYears()."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Cuentas",
+      "item": [
+        {
+          "name": "Abrir cuenta - datos válidos (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  var json = pm.response.json();",
+                  "  pm.environment.set('cuentaId', json.id);",
+                  "  pm.environment.set('numeroCuenta', json.numeroCuenta);",
+                  "}",
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });",
+                  "pm.test('Cuenta ACTIVA con numero de 10 dígitos', function () {",
+                  "  var json = pm.response.json();",
+                  "  pm.expect(json.estado).to.eql('ACTIVA');",
+                  "  pm.expect(json.numeroCuenta.length).to.eql(10);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{clienteToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tipoDocumento\": \"CC\",\n  \"numeroDocumento\": \"{{numeroDocumento}}\",\n  \"tipoCuenta\": \"AHORROS\",\n  \"montoApertura\": 150000\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/cuentas",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "cuentas"]
+            },
+            "description": "CuentaController.abrirCuenta. HALLAZGO: este endpoint no tiene @PreAuthorize y extrae el clienteId decodificando el header Authorization manualmente (no usa Authentication como SaldoController) — ver Reporte-Verificacion-QA-DigitalBank.pdf, hallazgo #1. tipoDocumento/numeroDocumento deben coincidir con el cliente dueño del token. tipoCuenta: AHORROS o CORRIENTE (únicos valores). montoApertura es opcional y no puede ser negativo (@PositiveOrZero)."
+          }
+        },
+        {
+          "name": "Abrir cuenta - cliente no autorizado (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 403', function () { pm.response.to.have.status(403); });",
+                  "pm.test('Mensaje: No puedes abrir cuentas a nombre de otro cliente', function () {",
+                  "  pm.expect(pm.response.json().message).to.eql('No puedes abrir cuentas a nombre de otro cliente');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{clienteToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tipoDocumento\": \"CC\",\n  \"numeroDocumento\": \"9999999999\",\n  \"tipoCuenta\": \"AHORROS\",\n  \"montoApertura\": 0\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/cuentas",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "cuentas"]
+            },
+            "description": "Usa un numeroDocumento de OTRO cliente ya existente en BD (distinto del dueño de {{clienteToken}}). Verificado en CuentaServiceImpl.abrirCuenta(): compara clienteIdAutenticado contra el cliente encontrado por documento y lanza ClienteNoAutorizadoException si no coinciden."
+          }
+        },
+        {
+          "name": "Depositar - monto válido (201)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{cajeroToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"monto\": 50000,\n  \"origen\": \"EFECTIVO\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/cuentas/{{cuentaId}}/depositos",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "cuentas", "{{cuentaId}}", "depositos"]
+            },
+            "description": "CuentaController.depositar, @PreAuthorize hasAnyRole('ADMIN','CAJERO'). origen: EFECTIVO, CHEQUE u OTRO (únicos valores). {{cuentaId}} se llena automáticamente al correr 'Abrir cuenta - datos válidos'."
+          }
+        },
+        {
+          "name": "Depositar - monto cero (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 400', function () { pm.response.to.have.status(400); });",
+                  "pm.test('Mensaje: Monto inválido', function () {",
+                  "  pm.expect(pm.response.json().message).to.eql('Monto inválido');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{cajeroToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"monto\": 0,\n  \"origen\": \"EFECTIVO\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/cuentas/{{cuentaId}}/depositos",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "cuentas", "{{cuentaId}}", "depositos"]
+            },
+            "description": "HALLAZGO: el rechazo de monto 0 o negativo vive SOLO en @DecimalMin del DTO DepositoRequest (activado por @Valid en el controlador) — DepositoServiceImpl no lo valida por su cuenta. Este request, al pasar por el controlador real, sí debería devolver 400 'Monto inválido'. Ver hallazgo #2 en el PDF de verificación."
+          }
+        },
+        {
+          "name": "Consultar saldo - titular de la cuenta (200)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{clienteToken}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/cuentas/{{numeroCuenta}}/saldo",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "cuentas", "{{numeroCuenta}}", "saldo"]
+            },
+            "description": "SaldoController.consultarSaldo. Verificado en SaldoServiceImpl: saldoDisponible = saldoContable - retencion. {{numeroCuenta}} se llena automáticamente al correr 'Abrir cuenta - datos válidos'."
+          }
+        },
+        {
+          "name": "Consultar saldo - cuenta ajena o inexistente (403 genérico)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 403', function () { pm.response.to.have.status(403); });",
+                  "pm.test('Mensaje genérico: Acceso no autorizado', function () {",
+                  "  pm.expect(pm.response.json().message).to.eql('Acceso no autorizado');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{clienteToken}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/cuentas/0000000000/saldo",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "cuentas", "0000000000", "saldo"]
+            },
+            "description": "Verificado en SaldoServiceImpl.consultarSaldo(): para un rol CLIENTE, una cuenta inexistente y una cuenta de otro cliente devuelven exactamente el mismo mensaje/excepción (AccesoNoAutorizadoException, 403) — diseño anti-enumeración intencional. Para ADMIN/CAJERO sí se distingue (404 'Cuenta no encontrada')."
+          }
+        }
+      ]
+    }
+  ]
+}
